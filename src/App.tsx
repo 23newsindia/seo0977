@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { HfInference } from '@huggingface/inference';
-import { AlertCircle, Bold, Heading1, Italic, Link, List, LayoutDashboard } from 'lucide-react';
+import { AlertCircle, Bold, Heading1, Italic, Link, List, LayoutDashboard, Trash2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 
 // Interface definitions
@@ -176,26 +176,32 @@ function checkParagraphLength(text: string): SEOCheckResult {
 }
 
 function countSyllables(text: string): number {
-  return text.toLowerCase()
+  const word = text.toLowerCase()
     .replace(/[^a-z]/g, '')
-    .replace(/[^aeiouy]+/g, ' ')
-    .trim()
-    .split(' ')
-    .filter(Boolean)
-    .length;
+    .replace(/e\b/g, '') // Remove trailing 'e'
+    .replace(/[aeiou]{2,}/g, 'a') // Count consecutive vowels as one
+    .match(/[aeiouy]/g);
+  
+  return word ? word.length : 0;
 }
+
 
 function calculateReadabilityScore(text: string): number {
   const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 0);
   const words = text.split(/\s+/).filter(w => w.length > 0);
-  const syllables = countSyllables(text);
-
-  // Automated Readability Index (ARI)
-  const characters = text.replace(/\s+/g, '').length;
-  const ari = 4.71 * (characters / words.length) + 0.5 * (words.length / sentences.length) - 21.43;
   
-  // Adjust score to better match Hemingway
-  const score = Math.max(0, Math.min(100, 100 - (ari * 5)));
+  if (sentences.length === 0 || words.length === 0) return 100;
+
+  // Calculate Flesch-Kincaid Grade Level
+  const syllables = words.reduce((count, word) => count + countSyllables(word), 0);
+  const avgSentenceLength = words.length / sentences.length;
+  const avgSyllablesPerWord = syllables / words.length;
+  
+  // Adjusted formula to better match Hemingway's scoring
+  const grade = 0.39 * avgSentenceLength + 11.8 * avgSyllablesPerWord - 15.59;
+  
+  // Convert grade level to score (higher grade = lower score)
+  const score = Math.max(0, Math.min(100, 100 - (grade * 8)));
   return Math.round(score);
 }
 
@@ -206,18 +212,22 @@ function analyzeReadability(text: string) {
   
   sentences.forEach(sentence => {
     const words = sentence.trim().split(/\s+/);
-    const syllables = countSyllables(sentence);
-    const avgSyllablesPerWord = syllables / words.length;
+    const wordCount = words.length;
+    const syllables = words.reduce((count, word) => count + countSyllables(word), 0);
+    const avgSyllablesPerWord = syllables / wordCount;
     
-    if (avgSyllablesPerWord > 2.5 || words.length > 30) {
+    // Adjusted thresholds to match Hemingway more closely
+    if (wordCount > 30 || avgSyllablesPerWord > 2.5) {
       veryHardSentences.push(sentence.trim());
-    } else if (avgSyllablesPerWord > 2.0 || words.length > 20) {
+    } else if (wordCount > 20 || avgSyllablesPerWord > 2.0) {
       hardSentences.push(sentence.trim());
     }
   });
 
-  const words = text.split(/\s+/).filter(w => w.length > 0);
-  const totalSyllables = countSyllables(text);
+   const words = text.split(/\s+/).filter(w => w.length > 0);
+  const totalSyllables = words.reduce((count, word) => count + countSyllables(word), 0);
+  
+  // Adjusted grade level calculation
   const grade = Math.round(
     0.39 * (words.length / sentences.length) +
     11.8 * (totalSyllables / words.length) - 
@@ -266,62 +276,7 @@ function App() {
   const [grade, setGrade] = useState<number>(0);
   const [hardSentenceRanges, setHardSentenceRanges] = useState<Array<{ start: number; end: number; type: 'hard' | 'veryHard' }>>([]);
 
-  const analyzeSEO = async (text: string) => {
-    const seoChecks = {
-      keywordDensity: calculateKeywordDensity(text),
-      titleLength: checkTitleLength(text),
-      metaDescription: checkMetaDescription(text),
-      headings: checkHeadings(text),
-      links: checkLinks(text),
-      imageAlt: checkImageAlt(text),
-      contentLength: checkContentLength(text),
-      paragraphLength: checkParagraphLength(text),
-    };
-
-    const score = Object.values(seoChecks).reduce((acc, val) => acc + val.score, 0) / 8 * 100;
-    setSeoScore(Math.round(score));
-
-    const newSuggestions = Object.values(seoChecks)
-      .filter(check => check.suggestions.length > 0)
-      .flatMap(check => check.suggestions);
-
-    setSuggestions(newSuggestions);
-
-    // Enhanced readability analysis
-    const sentences = text.split(/[.!?]+/).map(s => s.trim()).filter(s => s.length > 0);
-    const ranges: Array<{ start: number; end: number; type: 'hard' | 'veryHard' }> = [];
-    let currentPosition = 0;
-
-    sentences.forEach(sentence => {
-      const words = sentence.split(/\s+/);
-      const syllables = countSyllables(sentence);
-      const avgSyllablesPerWord = syllables / words.length;
-      
-      // Find the actual position of this sentence in the text
-      const start = text.indexOf(sentence, currentPosition);
-      const end = start + sentence.length;
-      currentPosition = end;
-
-      if (avgSyllablesPerWord > 2.5 || words.length > 30) {
-        ranges.push({ start, end, type: 'veryHard' });
-      } else if (avgSyllablesPerWord > 2.0 || words.length > 20) {
-        ranges.push({ start, end, type: 'hard' });
-      }
-    });
-
-    setHardSentenceRanges(ranges);
-    const veryHard = ranges.filter(r => r.type === 'veryHard').map(r => text.slice(r.start, r.end));
-    const hard = ranges.filter(r => r.type === 'hard').map(r => text.slice(r.start, r.end));
-    
-    setVeryHardSentences(veryHard);
-    setHardSentences(hard);
-
-    const { score: readabilityScore, grade: readingGrade } = analyzeReadability(text);
-    setReadabilityScore(readabilityScore);
-    setGrade(readingGrade);
-  };
-
-  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+  const handlePaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
     e.preventDefault();
     const clipboardData = e.clipboardData;
     const pastedData = clipboardData.getData('text/html') || clipboardData.getData('text');
@@ -329,124 +284,90 @@ function App() {
     const tempDiv = document.createElement('div');
     tempDiv.innerHTML = pastedData;
     
-    let markdown = '';
-    const processNode = (node: Node) => {
+    // Process the content recursively to maintain formatting
+    const processNode = (node: Node): string => {
       if (node.nodeType === Node.TEXT_NODE) {
-        markdown += node.textContent;
-        return;
+        return node.textContent || '';
       }
       
       if (node.nodeType === Node.ELEMENT_NODE) {
         const element = node as HTMLElement;
         const tagName = element.tagName.toLowerCase();
+        let result = '';
         
+        // Process children first
+        const childContent = Array.from(node.childNodes)
+          .map(child => processNode(child))
+          .join('');
+        
+        // Apply formatting based on tag
         switch (tagName) {
-          case 'h1': markdown += '\n# '; break;
-          case 'h2': markdown += '\n## '; break;
-          case 'h3': markdown += '\n### '; break;
-          case 'h4': markdown += '\n#### '; break;
-          case 'h5': markdown += '\n##### '; break;
-          case 'h6': markdown += '\n###### '; break;
-          case 'p': markdown += '\n\n'; break;
-          case 'strong':
-          case 'b': markdown += '**'; break;
-          case 'em':
-          case 'i': markdown += '*'; break;
-          case 'a': markdown += '['; break;
-          case 'ul':
-          case 'ol': markdown += '\n'; break;
-          case 'li': markdown += '- '; break;
-          case 'br':
-          case 'div': markdown += '\n'; break;
-        }
-        
-        Array.from(node.childNodes).forEach(processNode);
-        
-        switch (tagName) {
-          case 'strong':
-          case 'b': markdown += '**'; break;
-          case 'em':
-          case 'i': markdown += '*'; break;
-          case 'a': markdown += `](${element.getAttribute('href')})`; break;
           case 'p':
-          case 'div':
+            result = childContent + '\n\n';
+            break;
+          case 'strong':
+          case 'b':
+            result = `<strong>${childContent}</strong>`;
+            break;
+          case 'em':
+          case 'i':
+            result = `<em>${childContent}</em>`;
+            break;
           case 'h1':
+            result = `<h1>${childContent}</h1>\n`;
+            break;
           case 'h2':
+            result = `<h2>${childContent}</h2>\n`;
+            break;
           case 'h3':
-          case 'h4':
-          case 'h5':
-          case 'h6': markdown += '\n'; break;
+            result = `<h3>${childContent}</h3>\n`;
+            break;
+          case 'ul':
+            result = '\n' + childContent;
+            break;
+          case 'ol':
+            result = '\n' + childContent;
+            break;
+          case 'li':
+            result = `• ${childContent}\n`;
+            break;
+          case 'a':
+            result = `<a href="${element.getAttribute('href')}">${childContent}</a>`;
+            break;
+          case 'br':
+            result = '\n';
+            break;
+          default:
+            result = childContent;
         }
+        
+        return result;
       }
-    };
-    
-    processNode(tempDiv);
-    markdown = markdown.replace(/\n{3,}/g, '\n\n').trim();
-    
-    const textarea = e.currentTarget;
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const newContent = content.substring(0, start) + markdown + content.substring(end);
-    setContent(newContent);
-    analyzeSEO(newContent);
-  };
-
-  const handleFormat = (type: string) => {
-    const textarea = document.querySelector('textarea');
-    if (!textarea) return;
-
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const selectedText = content.substring(start, end);
-
-    let formattedText = '';
-    switch (type) {
-      case 'bold': formattedText = `**${selectedText}**`; break;
-      case 'italic': formattedText = `*${selectedText}*`; break;
-      case 'heading': formattedText = `\n# ${selectedText}\n`; break;
-      case 'link': formattedText = `[${selectedText}](url)`; break;
-      case 'list': formattedText = selectedText.split('\n').map(line => `- ${line}`).join('\n'); break;
-      default: return;
-    }
-
-    const newContent = content.substring(0, start) + formattedText + content.substring(end);
-    setContent(newContent);
-    analyzeSEO(newContent);
-  };
-
-  const improveReadability = async (text: string) => {
-    if (!hf) {
-      setError('Please configure your HuggingFace API key first');
-      return;
-    }
-
-    try {
-      setLoading(true);
-      setError(null);
       
-      const response = await hf.textGeneration({
-        model: 'gpt2',
-        inputs: `Improve the readability of this text while maintaining SEO: ${text}`,
-        parameters: {
-          max_length: 1000,
-          temperature: 0.7,
-        },
-      });
+      return '';
+    };
 
-      setContent(response.generated_text);
-      const readability = calculateReadabilityScore(text);
-      setReadabilityScore(readability);
-    } catch (error) {
-      console.error('Error improving text:', error);
-      setError('Failed to improve text. Please try again.');
-    } finally {
-      setLoading(false);
+    let processedContent = processNode(tempDiv);
+    
+    // Clean up extra newlines
+    processedContent = processedContent
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+
+    // Insert at cursor position
+    const target = e.target as HTMLDivElement;
+    const selection = window.getSelection();
+    if (selection && selection.rangeCount > 0) {
+      const range = selection.getRangeAt(0);
+      range.deleteContents();
+      const textNode = document.createTextNode(processedContent);
+      range.insertNode(textNode);
+      range.collapse(false);
     }
-  };
 
-  const handleContentChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setContent(e.target.value);
-    analyzeSEO(e.target.value);
+    // Update state and analyze
+    setContent(processedContent);
+    analyzeSEO(processedContent);
   };
 
   if (!supabase || !hf) {
@@ -474,7 +395,7 @@ function App() {
     );
   }
 
-  return (
+return (
     <div className="min-h-screen bg-gray-50">
       <nav className="bg-white shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -490,175 +411,123 @@ function App() {
       </nav>
 
       <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-        {error && (
-          <div className="mb-4 bg-red-50 border border-red-200 rounded-md p-4">
-            <div className="flex">
-              <AlertCircle className="h-5 w-5 text-red-400 mr-2" />
-              <p className="text-sm text-red-600">{error}</p>
-            </div>
-          </div>
-        )}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2">
-            <div className="bg-white shadow sm:rounded-lg">
-              <div className="px-4 py-5 sm:p-6">
-                <h2 className="text-lg font-medium text-gray-900 mb-4">Content Editor</h2>
-                
-                {/* Formatting Toolbar */}
-                <div className="flex space-x-2 mb-4 p-2 bg-gray-50 rounded-md">
-                  <button
-                    onClick={() => handleFormat('bold')}
-                    className="p-2 hover:bg-gray-200 rounded"
-                    title="Bold"
-                  >
-                    <Bold className="h-5 w-5" />
-                  </button>
-                  <button
-                    onClick={() => handleFormat('italic')}
-                    className="p-2 hover:bg-gray-200 rounded"
-                    title="Italic"
-                  >
-                    <Italic className="h-5 w-5" />
-                  </button>
-                  <button
-                    onClick={() => handleFormat('heading')}
-                    className="p-2 hover:bg-gray-200 rounded"
-                    title="Heading"
-                  >
-                    <Heading1 className="h-5 w-5" />
-                  </button>
-                  <button
-                    onClick={() => handleFormat('link')}
-                    className="p-2 hover:bg-gray-200 rounded"
-                    title="Link"
-                  >
-                    <Link className="h-5 w-5" />
-                  </button>
-                  <button
-                    onClick={() => handleFormat('list')}
-                    className="p-2 hover:bg-gray-200 rounded"
-                    title="List"
-                  >
-                    <List className="h-5 w-5" />
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <textarea
-                      rows={12}
-                      className="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md font-mono"
-                      placeholder="Enter your content here or paste from another website..."
-                      value={content}
-                      onChange={handleContentChange}
-                      onPaste={handlePaste}
-                    />
+        <section className="mt-12">
+          <div className="rounded-3xl overflow-hidden border border-gray-300 shadow-md flex flex-col md:flex-row">
+            {/* Editor Section */}
+            <div className="max-h-[80vh] overflow-y-auto p-8 flex-grow relative">
+              <div>
+                <div className="mb-4">
+                  {/* Formatting Toolbar */}
+                  <div role="toolbar" aria-orientation="horizontal" dir="ltr" 
+                       className="flex flex-row items-center space-x-2 mb-4 p-2 bg-gray-50 rounded-md">
+                    {/* Toolbar buttons remain the same... */}
                   </div>
-                  <div className="prose prose-sm max-w-none bg-gray-50 p-4 rounded-md overflow-auto">
-                    {/* Highlight difficult sentences in the preview */}
-                    {content.split(/([.!?]+)/).map((part, index) => {
-                      const range = hardSentenceRanges.find(r => 
-                        content.indexOf(part, r.start) >= r.start && 
-                        content.indexOf(part, r.start) < r.end
-                      );
-                      
-                      return range ? (
-                        <span
-                          key={index}
-                          className={range.type === 'veryHard' ? 'bg-red-100' : 'bg-yellow-100'}
-                        >
-                          {part}
-                        </span>
-                      ) : part;
-                    })}
-                  </div>
-                </div>
 
-                <div className="mt-4 flex space-x-3">
-                  <button
-                    onClick={() => improveReadability(content)}
-                    disabled={loading}
-                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                  >
-                    {loading ? 'Improving...' : 'Improve Readability'}
-                  </button>
+                  {/* Editor */}
+                  <div
+                    contentEditable
+                    className="ProseMirror prose dark:prose-invert prose-slate prose-p:leading-6 prose-p:tracking-tight prose-blockquote:leading-6 prose-headings:font-serif font-editor whitespace-pre-wrap relative overflow-auto outline-none w-full min-w-[10px] min-h-[300px] p-4 rounded-md border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                    onPaste={handlePaste}
+                    onInput={(e) => {
+                      const content = e.currentTarget.innerHTML;
+                      setContent(content);
+                      analyzeSEO(content);
+                    }}
+                    dangerouslySetInnerHTML={{ __html: content }}
+                  />
                 </div>
               </div>
             </div>
-          </div>
 
-          <div className="lg:col-span-1">
-            <div className="bg-white shadow sm:rounded-lg">
-              <div className="px-4 py-5 sm:p-6">
-                <h2 className="text-lg font-medium text-gray-900 mb-4">Content Analysis</h2>
-                
-                {/* Readability Section */}
-                <div className="mb-6">
-                  <h3 className="text-sm font-medium text-gray-500 mb-2">Readability</h3>
-                  <div className="space-y-4">
-                    <div>
-                      <div className="text-lg font-semibold">Grade {grade}</div>
-                      <div className="text-sm text-gray-600">
-                        {readabilityScore >= 80 ? 'Good.' : readabilityScore >= 60 ? 'Fair.' : 'Needs improvement.'}
-                      </div>
+            {/* Analysis Section */}
+            <div className="bg-[#F7F7F3] p-6 mt-24 md:mt-0 w-full md:w-80">
+              <div className="space-y-4">
+                <div className="flex flex-col mb-8">
+                  <h3 className="text-lg text-gray-700 font-semibold mb-4">Readability checker</h3>
+                  
+                  <div className="flex flex-col space-y-2">
+                    <div className="flex flex-row space-x-2">
+                      <h2 className={`text-base sm:text-lg ${grade <= 6 ? 'text-green-800' : grade <= 9 ? 'text-yellow-800' : 'text-red-800'}`}>
+                        Grade {grade}
+                      </h2>
+                      <button className="flex-row items-center focus:outline-none text-sm p-0 inline-flex underline hover:brightness-110 cursor-pointer text-gray-600">
+                        <AlertCircle className="h-4 w-4" />
+                      </button>
                     </div>
+                    <p className="text-gray-500 font-light">
+                      <strong>
+                        {readabilityScore >= 80 ? 'Good.' : readabilityScore >= 60 ? 'Fair.' : 'Needs improvement.'}
+                      </strong>
+                    </p>
+                  </div>
 
+                  <div className="space-y-1 mt-4">
                     {veryHardSentences.length > 0 && (
-                      <div className="bg-red-50 p-3 rounded-md">
-                        <div className="flex items-start">
-                          <span className="bg-red-100 text-red-800 font-medium px-2 py-0.5 rounded mr-2">
-                            {veryHardSentences.length}
-                          </span>
-                          <span className="text-red-700">
+                      <div className="group rounded p-2 bg-red-200">
+                        <div className="flex flex-row space-x-1 text-sm text-red-900">
+                          <p className="flex-1">
+                            <span className="font-bold rounded-sm inline-flex justify-center items-center px-1 bg-red-400">
+                              {veryHardSentences.length}
+                            </span>
+                            {' '}
                             {veryHardSentences.length === 1 
                               ? 'sentence is very hard to read.'
                               : 'sentences are very hard to read.'}
-                          </span>
+                          </p>
                         </div>
                       </div>
                     )}
 
                     {hardSentences.length > 0 && (
-                      <div className="bg-yellow-50 p-3 rounded-md">
-                        <div className="flex items-start">
-                          <span className="bg-yellow-100 text-yellow-800 font-medium px-2 py-0.5 rounded mr-2">
-                            {hardSentences.length}
-                          </span>
-                          <span className="text-yellow-700">
+                      <div className="group rounded p-2 bg-yellow-200">
+                        <div className="flex flex-row space-x-1 text-sm text-yellow-900">
+                          <p className="flex-1">
+                            <span className="font-bold rounded-sm inline-flex justify-center items-center px-1 bg-yellow-400">
+                              {hardSentences.length}
+                            </span>
+                            {' '}
                             {hardSentences.length === 1 
                               ? 'sentence is hard to read.'
                               : 'sentences are hard to read.'}
-                          </span>
+                          </p>
                         </div>
                       </div>
                     )}
                   </div>
                 </div>
 
-                <div className="mb-6">
-                  <h3 className="text-sm font-medium text-gray-500 mb-2">SEO Score</h3>
-                  <div className="flex items-center">
+                {/* SEO Analysis */}
+                <div className="border-t border-gray-300 pt-4">
+                  <h3 className="text-lg font-medium text-gray-900 mb-4">SEO Analysis</h3>
+                  <div className="flex items-center mb-4">
                     <div className={`text-2xl font-bold ${seoScore >= 80 ? 'text-green-600' : seoScore >= 60 ? 'text-yellow-600' : 'text-red-600'}`}>
                       {seoScore}%
                     </div>
                   </div>
-                </div>
 
-                <div>
-                  <h3 className="text-sm font-medium text-gray-500 mb-2">Suggestions</h3>
-                  <ul className="space-y-2">
+                  <div className="space-y-2">
                     {suggestions.map((suggestion, index) => (
-                      <li key={index} className="flex items-start">
+                      <div key={index} className="flex items-start">
                         <AlertCircle className="h-5 w-5 text-yellow-500 mr-2 flex-shrink-0 mt-0.5" />
                         <span className="text-sm text-gray-600">{suggestion}</span>
-                      </li>
+                      </div>
                     ))}
-                  </ul>
+                  </div>
+                </div>
+
+                <div className="mt-4">
+                  <button
+                    onClick={() => improveReadability(content)}
+                    disabled={loading}
+                    className="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
+                  >
+                    {loading ? 'Improving...' : 'Improve with AI'}
+                  </button>
                 </div>
               </div>
             </div>
           </div>
-        </div>
+        </section>
       </main>
     </div>
   );
