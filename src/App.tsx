@@ -1,8 +1,228 @@
-import React, { useState } from 'react';
-import { createClient } from '@supabase/supabase-js';
-import { HfInference } from '@huggingface/inference';
-import { AlertCircle, Bold, Heading1, Italic, Link, List, LayoutDashboard } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
+// Utility functions first
+interface SEOCheckResult {
+  score: number;
+  suggestions: string[];
+}
+
+function calculateKeywordDensity(text: string): SEOCheckResult {
+  const words = text.toLowerCase().split(/\s+/);
+  const wordFrequency: { [key: string]: number } = {};
+  
+  words.forEach(word => {
+    if (word.length > 3) {
+      wordFrequency[word] = (wordFrequency[word] || 0) + 1;
+    }
+  });
+
+  const suggestions: string[] = [];
+  let score = 1;
+
+  const keywords = Object.entries(wordFrequency)
+    .filter(([_, count]) => count > 1)
+    .sort(([_, a], [__, b]) => b - a)
+    .slice(0, 5);
+
+  if (keywords.length === 0) {
+    suggestions.push("No clear keywords found. Consider using relevant keywords multiple times.");
+    score = 0.3;
+  } else if (keywords.length < 3) {
+    suggestions.push("Limited keyword usage. Try incorporating more relevant keywords.");
+    score = 0.6;
+  }
+
+  return { score, suggestions };
+}
+
+function checkTitleLength(text: string): SEOCheckResult {
+  const titleMatch = text.match(/^#\s+(.+)$/m);
+  const suggestions: string[] = [];
+  let score = 1;
+
+  if (!titleMatch) {
+    suggestions.push("No main title (H1) found. Add a clear title at the beginning.");
+    score = 0;
+  } else {
+    const titleLength = titleMatch[1].length;
+    if (titleLength < 30) {
+      suggestions.push("Title is too short. Aim for 50-60 characters for better SEO.");
+      score = 0.5;
+    } else if (titleLength > 60) {
+      suggestions.push("Title is too long. Keep it under 60 characters for better visibility in search results.");
+      score = 0.7;
+    }
+  }
+
+  return { score, suggestions };
+}
+
+function checkMetaDescription(text: string): SEOCheckResult {
+  const firstParagraph = text.split('\n\n')[0].replace(/^#.*\n/, '').trim();
+  const suggestions: string[] = [];
+  let score = 1;
+
+  if (!firstParagraph) {
+    suggestions.push("Add a clear introductory paragraph that summarizes your content.");
+    score = 0;
+  } else if (firstParagraph.length < 120) {
+    suggestions.push("Introduction is too short. Aim for 150-160 characters for better search visibility.");
+    score = 0.5;
+  } else if (firstParagraph.length > 160) {
+    suggestions.push("Introduction is too long. Keep it under 160 characters for optimal display in search results.");
+    score = 0.7;
+  }
+
+  return { score, suggestions };
+}
+
+function checkHeadings(text: string): SEOCheckResult {
+  const headings = text.match(/^#{1,6}\s+.+$/gm) || [];
+  const suggestions: string[] = [];
+  let score = 1;
+
+  if (headings.length === 0) {
+    suggestions.push("No headings found. Use headings to structure your content.");
+    score = 0;
+  } else {
+    const h1Count = headings.filter(h => h.startsWith('# ')).length;
+    const hasSubheadings = headings.some(h => h.startsWith('## '));
+
+    if (h1Count === 0) {
+      suggestions.push("Add a main heading (H1) to your content.");
+      score = 0.3;
+    } else if (h1Count > 1) {
+      suggestions.push("Multiple H1 headings found. Use only one main heading.");
+      score = 0.5;
+    }
+
+    if (!hasSubheadings) {
+      suggestions.push("Add subheadings (H2, H3) to better structure your content.");
+      score = score * 0.7;
+    }
+  }
+
+  return { score, suggestions };
+}
+
+function checkLinks(text: string): SEOCheckResult {
+  const links = text.match(/\[([^\]]+)\]\(([^)]+)\)/g) || [];
+  const suggestions: string[] = [];
+  let score = 1;
+
+  if (links.length === 0) {
+    suggestions.push("No links found. Add relevant internal or external links to enhance content value.");
+    score = 0.5;
+  } else {
+    const hasEmptyAnchors = links.some(link => link.includes('[]'));
+    if (hasEmptyAnchors) {
+      suggestions.push("Some links have empty anchor text. Add descriptive text to all links.");
+      score = 0.7;
+    }
+  }
+
+  return { score, suggestions };
+}
+
+function checkImageAlt(text: string): SEOCheckResult {
+  const images = text.match(/!\[([^\]]*)\]\(([^)]+)\)/g) || [];
+  const suggestions: string[] = [];
+  let score = 1;
+
+  if (images.length > 0) {
+    const missingAlt = images.some(img => img.match(/!\[\]\(/));
+    if (missingAlt) {
+      suggestions.push("Some images are missing alt text. Add descriptive alt text to all images.");
+      score = 0.5;
+    }
+  }
+
+  return { score, suggestions };
+}
+
+function checkContentLength(text: string): SEOCheckResult {
+  const wordCount = text.split(/\s+/).length;
+  const suggestions: string[] = [];
+  let score = 1;
+
+  if (wordCount < 300) {
+    suggestions.push("Content is too short. Aim for at least 300 words for better SEO.");
+    score = 0.3;
+  } else if (wordCount < 600) {
+    suggestions.push("Consider adding more content. Long-form content (1000+ words) typically ranks better.");
+    score = 0.7;
+  }
+
+  return { score, suggestions };
+}
+
+function checkParagraphLength(text: string): SEOCheckResult {
+  const paragraphs = text.split(/\n\n+/);
+  const suggestions: string[] = [];
+  let score = 1;
+
+  const longParagraphs = paragraphs.filter(p => p.split(/\s+/).length > 150);
+  if (longParagraphs.length > 0) {
+    suggestions.push("Some paragraphs are too long. Break them into smaller chunks for better readability.");
+    score = 0.7;
+  }
+
+  return { score, suggestions };
+}
+
+function countSyllables(text: string): number {
+  return text.toLowerCase()
+    .replace(/[^a-z]/g, '')
+    .replace(/[^aeiouy]+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(Boolean)
+    .length;
+}
+
+function calculateReadabilityScore(text: string): number {
+  const sentences = text.split(/[.!?]+/);
+  const words = text.split(/\s+/);
+  const syllables = countSyllables(text);
+
+  const avgWordsPerSentence = words.length / sentences.length;
+  const avgSyllablesPerWord = syllables / words.length;
+  
+  const readabilityScore = 206.835 - (1.015 * avgWordsPerSentence) - (84.6 * avgSyllablesPerWord);
+  
+  return Math.min(100, Math.max(0, Math.round(readabilityScore)));
+}
+
+function analyzeReadability(text: string) {
+  const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 0);
+  const hardSentences: string[] = [];
+  const veryHardSentences: string[] = [];
+  
+  sentences.forEach(sentence => {
+    const words = sentence.trim().split(/\s+/);
+    const syllables = countSyllables(sentence);
+    const avgSyllablesPerWord = syllables / words.length;
+    
+    if (avgSyllablesPerWord > 2.5 || words.length > 30) {
+      veryHardSentences.push(sentence.trim());
+    } else if (avgSyllablesPerWord > 2.0 || words.length > 20) {
+      hardSentences.push(sentence.trim());
+    }
+  });
+
+  const words = text.split(/\s+/).filter(w => w.length > 0);
+  const totalSyllables = countSyllables(text);
+  const grade = Math.round(
+    0.39 * (words.length / sentences.length) +
+    11.8 * (totalSyllables / words.length) - 
+    15.59
+  );
+
+  return {
+    score: calculateReadabilityScore(text),
+    hardSentences,
+    veryHardSentences,
+    grade: Math.max(1, Math.min(12, grade))
+  };
+}
 
 // Initialize Supabase client
 let supabase = null;
@@ -25,6 +245,13 @@ try {
   console.error('Error initializing clients:', error);
 }
 
+// Main App Component
+import React, { useState } from 'react';
+import { createClient } from '@supabase/supabase-js';
+import { HfInference } from '@huggingface/inference';
+import { AlertCircle, Bold, Heading1, Italic, Link, List, LayoutDashboard } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+
 function App() {
   const [content, setContent] = useState('');
   const [seoScore, setSeoScore] = useState(0);
@@ -32,9 +259,11 @@ function App() {
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hardSentences, setHardSentences] = useState<string[]>([]);
+  const [veryHardSentences, setVeryHardSentences] = useState<string[]>([]);
+  const [grade, setGrade] = useState<number>(0);
 
   const analyzeSEO = async (text: string) => {
-    // Enhanced SEO checks
     const seoChecks = {
       keywordDensity: calculateKeywordDensity(text),
       titleLength: checkTitleLength(text),
@@ -49,27 +278,27 @@ function App() {
     const score = Object.values(seoChecks).reduce((acc, val) => acc + val.score, 0) / 8 * 100;
     setSeoScore(Math.round(score));
 
-    // Collect all suggestions
     const newSuggestions = Object.values(seoChecks)
       .filter(check => check.suggestions.length > 0)
       .flatMap(check => check.suggestions);
 
     setSuggestions(newSuggestions);
-    setReadabilityScore(calculateReadabilityScore(text));
+
+    const { score: readabilityScore, hardSentences: hard, veryHardSentences: veryHard, grade: readingGrade } = analyzeReadability(text);
+    setReadabilityScore(readabilityScore);
+    setHardSentences(hard);
+    setVeryHardSentences(veryHard);
+    setGrade(readingGrade);
   };
 
   const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     e.preventDefault();
-    
-    // Get the clipboard content
     const clipboardData = e.clipboardData;
     const pastedData = clipboardData.getData('text/html') || clipboardData.getData('text');
     
-    // Create a temporary div to parse HTML
     const tempDiv = document.createElement('div');
     tempDiv.innerHTML = pastedData;
     
-    // Convert HTML to Markdown
     let markdown = '';
     const processNode = (node: Node) => {
       if (node.nodeType === Node.TEXT_NODE) {
@@ -81,73 +310,34 @@ function App() {
         const element = node as HTMLElement;
         const tagName = element.tagName.toLowerCase();
         
-        // Handle different HTML tags
         switch (tagName) {
-          case 'h1':
-            markdown += '\n# ';
-            break;
-          case 'h2':
-            markdown += '\n## ';
-            break;
-          case 'h3':
-            markdown += '\n### ';
-            break;
-          case 'h4':
-            markdown += '\n#### ';
-            break;
-          case 'h5':
-            markdown += '\n##### ';
-            break;
-          case 'h6':
-            markdown += '\n###### ';
-            break;
-          case 'p':
-            markdown += '\n\n';
-            break;
+          case 'h1': markdown += '\n# '; break;
+          case 'h2': markdown += '\n## '; break;
+          case 'h3': markdown += '\n### '; break;
+          case 'h4': markdown += '\n#### '; break;
+          case 'h5': markdown += '\n##### '; break;
+          case 'h6': markdown += '\n###### '; break;
+          case 'p': markdown += '\n\n'; break;
           case 'strong':
-          case 'b':
-            markdown += '**';
-            break;
+          case 'b': markdown += '**'; break;
           case 'em':
-          case 'i':
-            markdown += '*';
-            break;
-          case 'a':
-            markdown += '[';
-            break;
+          case 'i': markdown += '*'; break;
+          case 'a': markdown += '['; break;
           case 'ul':
-            markdown += '\n';
-            break;
-          case 'ol':
-            markdown += '\n';
-            break;
-          case 'li':
-            markdown += '- ';
-            break;
+          case 'ol': markdown += '\n'; break;
+          case 'li': markdown += '- '; break;
           case 'br':
-            markdown += '\n';
-            break;
-          case 'div':
-            markdown += '\n';
-            break;
+          case 'div': markdown += '\n'; break;
         }
         
-        // Process child nodes
         Array.from(node.childNodes).forEach(processNode);
         
-        // Close tags
         switch (tagName) {
           case 'strong':
-          case 'b':
-            markdown += '**';
-            break;
+          case 'b': markdown += '**'; break;
           case 'em':
-          case 'i':
-            markdown += '*';
-            break;
-          case 'a':
-            markdown += `](${element.getAttribute('href')})`;
-            break;
+          case 'i': markdown += '*'; break;
+          case 'a': markdown += `](${element.getAttribute('href')})`; break;
           case 'p':
           case 'div':
           case 'h1':
@@ -155,21 +345,14 @@ function App() {
           case 'h3':
           case 'h4':
           case 'h5':
-          case 'h6':
-            markdown += '\n';
-            break;
+          case 'h6': markdown += '\n'; break;
         }
       }
     };
     
     processNode(tempDiv);
+    markdown = markdown.replace(/\n{3,}/g, '\n\n').trim();
     
-    // Clean up the markdown
-    markdown = markdown
-      .replace(/\n{3,}/g, '\n\n') // Remove extra newlines
-      .trim();
-    
-    // Insert the markdown at cursor position
     const textarea = e.currentTarget;
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
@@ -188,23 +371,12 @@ function App() {
 
     let formattedText = '';
     switch (type) {
-      case 'bold':
-        formattedText = `**${selectedText}**`;
-        break;
-      case 'italic':
-        formattedText = `*${selectedText}*`;
-        break;
-      case 'heading':
-        formattedText = `\n# ${selectedText}\n`;
-        break;
-      case 'link':
-        formattedText = `[${selectedText}](url)`;
-        break;
-      case 'list':
-        formattedText = selectedText.split('\n').map(line => `- ${line}`).join('\n');
-        break;
-      default:
-        return;
+      case 'bold': formattedText = `**${selectedText}**`; break;
+      case 'italic': formattedText = `*${selectedText}*`; break;
+      case 'heading': formattedText = `\n# ${selectedText}\n`; break;
+      case 'link': formattedText = `[${selectedText}](url)`; break;
+      case 'list': formattedText = selectedText.split('\n').map(line => `- ${line}`).join('\n'); break;
+      default: return;
     }
 
     const newContent = content.substring(0, start) + formattedText + content.substring(end);
@@ -375,20 +547,54 @@ function App() {
               <div className="px-4 py-5 sm:p-6">
                 <h2 className="text-lg font-medium text-gray-900 mb-4">Content Analysis</h2>
                 
+                {/* Readability Section */}
+                <div className="mb-6">
+                  <h3 className="text-sm font-medium text-gray-500 mb-2">Readability</h3>
+                  <div className="space-y-4">
+                    <div>
+                      <div className="text-lg font-semibold">Grade {grade}</div>
+                      <div className="text-sm text-gray-600">
+                        {readabilityScore >= 80 ? 'Good.' : readabilityScore >= 60 ? 'Fair.' : 'Needs improvement.'}
+                      </div>
+                    </div>
+
+                    {veryHardSentences.length > 0 && (
+                      <div className="bg-red-50 p-3 rounded-md">
+                        <div className="flex items-start">
+                          <span className="bg-red-100 text-red-800 font-medium px-2 py-0.5 rounded mr-2">
+                            {veryHardSentences.length}
+                          </span>
+                          <span className="text-red-700">
+                            {veryHardSentences.length === 1 
+                              ? 'sentence is very hard to read.'
+                              : 'sentences are very hard to read.'}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+
+                    {hardSentences.length > 0 && (
+                      <div className="bg-yellow-50 p-3 rounded-md">
+                        <div className="flex items-start">
+                          <span className="bg-yellow-100 text-yellow-800 font-medium px-2 py-0.5 rounded mr-2">
+                            {hardSentences.length}
+                          </span>
+                          <span className="text-yellow-700">
+                            {hardSentences.length === 1 
+                              ? 'sentence is hard to read.'
+                              : 'sentences are hard to read.'}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
                 <div className="mb-6">
                   <h3 className="text-sm font-medium text-gray-500 mb-2">SEO Score</h3>
                   <div className="flex items-center">
                     <div className={`text-2xl font-bold ${seoScore >= 80 ? 'text-green-600' : seoScore >= 60 ? 'text-yellow-600' : 'text-red-600'}`}>
                       {seoScore}%
-                    </div>
-                  </div>
-                </div>
-
-                <div className="mb-6">
-                  <h3 className="text-sm font-medium text-gray-500 mb-2">Readability Score</h3>
-                  <div className="flex items-center">
-                    <div className={`text-2xl font-bold ${readabilityScore >= 80 ? 'text-green-600' : readabilityScore >= 60 ? 'text-yellow-600' : 'text-red-600'}`}>
-                      {readabilityScore}%
                     </div>
                   </div>
                 </div>
@@ -413,206 +619,5 @@ function App() {
   );
 }
 
-// Interface for SEO check results
-interface SEOCheckResult {
-  score: number;
-  suggestions: string[];
-}
-
-// Enhanced utility functions
-function calculateKeywordDensity(text: string): SEOCheckResult {
-  const words = text.toLowerCase().split(/\s+/);
-  const wordCount = words.length;
-  const wordFrequency: { [key: string]: number } = {};
-  
-  words.forEach(word => {
-    if (word.length > 3) { // Only count words longer than 3 characters
-      wordFrequency[word] = (wordFrequency[word] || 0) + 1;
-    }
-  });
-
-  const suggestions: string[] = [];
-  let score = 1;
-
-  // Find potential keywords (words used multiple times)
-  const keywords = Object.entries(wordFrequency)
-    .filter(([_, count]) => count > 1)
-    .sort(([_, a], [__, b]) => b - a)
-    .slice(0, 5);
-
-  if (keywords.length === 0) {
-    suggestions.push("No clear keywords found. Consider using relevant keywords multiple times.");
-    score = 0.3;
-  } else if (keywords.length < 3) {
-    suggestions.push("Limited keyword usage. Try incorporating more relevant keywords.");
-    score = 0.6;
-  }
-
-  return { score, suggestions };
-}
-
-function checkTitleLength(text: string): SEOCheckResult {
-  const titleMatch = text.match(/^#\s+(.+)$/m);
-  const suggestions: string[] = [];
-  let score = 1;
-
-  if (!titleMatch) {
-    suggestions.push("No main title (H1) found. Add a clear title at the beginning.");
-    score = 0;
-  } else {
-    const titleLength = titleMatch[1].length;
-    if (titleLength < 30) {
-      suggestions.push("Title is too short. Aim for 50-60 characters for better SEO.");
-      score = 0.5;
-    } else if (titleLength > 60) {
-      suggestions.push("Title is too long. Keep it under 60 characters for better visibility in search results.");
-      score = 0.7;
-    }
-  }
-
-  return { score, suggestions };
-}
-
-function checkMetaDescription(text: string): SEOCheckResult {
-  const firstParagraph = text.split('\n\n')[0].replace(/^#.*\n/, '').trim();
-  const suggestions: string[] = [];
-  let score = 1;
-
-  if (!firstParagraph) {
-    suggestions.push("Add a clear introductory paragraph that summarizes your content.");
-    score = 0;
-  } else if (firstParagraph.length < 120) {
-    suggestions.push("Introduction is too short. Aim for 150-160 characters for better search visibility.");
-    score = 0.5;
-  } else if (firstParagraph.length > 160) {
-    suggestions.push("Introduction is too long. Keep it under 160 characters for optimal display in search results.");
-    score = 0.7;
-  }
-
-  return { score, suggestions };
-}
-
-function checkHeadings(text: string): SEOCheckResult {
-  const headings = text.match(/^#{1,6}\s+.+$/gm) || [];
-  const suggestions: string[] = [];
-  let score = 1;
-
-  if (headings.length === 0) {
-    suggestions.push("No headings found. Use headings to structure your content.");
-    score = 0;
-  } else {
-    const h1Count = headings.filter(h => h.startsWith('# ')).length;
-    const hasSubheadings = headings.some(h => h.startsWith('## '));
-
-    if (h1Count === 0) {
-      suggestions.push("Add a main heading (H1) to your content.");
-      score = 0.3;
-    } else if (h1Count > 1) {
-      suggestions.push("Multiple H1 headings found. Use only one main heading.");
-      score = 0.5;
-    }
-
-    if (!hasSubheadings) {
-      suggestions.push("Add subheadings (H2, H3) to better structure your content.");
-      score = score * 0.7;
-    }
-  }
-
-  return { score, suggestions };
-}
-
-function checkLinks(text: string): SEOCheckResult {
-  const links = text.match(/\[([^\]]+)\]\(([^)]+)\)/g) || [];
-  const suggestions: string[] = [];
-  let score = 1;
-
-  if (links.length === 0) {
-    suggestions.push("No links found. Add relevant internal or external links to enhance content value.");
-    score = 0.5;
-  } else {
-    const hasEmptyAnchors = links.some(link => link.includes('[]'));
-    if (hasEmptyAnchors) {
-      suggestions.push("Some links have empty anchor text. Add descriptive text to all links.");
-      score = 0.7;
-    }
-  }
-
-  return { score, suggestions };
-}
-
-function checkImageAlt(text: string): SEOCheckResult {
-  const images = text.match(/!\[([^\]]*)\]\(([^)]+)\)/g) || [];
-  const suggestions: string[] = [];
-  let score = 1;
-
-  if (images.length > 0) {
-    const missingAlt = images.some(img => img.match(/!\[\]\(/));
-    if (missingAlt) {
-      suggestions.push("Some images are missing alt text. Add descriptive alt text to all images.");
-      score = 0.5;
-    }
-  }
-
-  return { score, suggestions };
-}
-
-function checkContentLength(text: string): SEOCheckResult {
-  const wordCount = text.split(/\s+/).length;
-  const suggestions: string[] = [];
-  let score = 1;
-
-  if (wordCount < 300) {
-    suggestions.push("Content is too short. Aim for at least 300 words for better SEO.");
-    score = 0.3;
-  } else if (wordCount < 600) {
-    suggestions.push("Consider adding more content. Long-form content (1000+ words) typically ranks better.");
-    score = 0.7;
-  }
-
-  return { score, suggestions };
-}
-
-function checkParagraphLength(text: string): SEOCheckResult {
-  const paragraphs = text.split(/\n\n+/);
-  const suggestions: string[] = [];
-  let score = 1;
-
-  const longParagraphs = paragraphs.filter(p => p.split(/\s+/).length > 150);
-  if (longParagraphs.length > 0) {
-    suggestions.push("Some paragraphs are too long. Break them into smaller chunks for better readability.");
-    score = 0.7;
-  }
-
-  return { score, suggestions };
-}
-
-function calculateReadabilityScore(text: string): number {
-  // Calculate readability using multiple factors
-  const sentences = text.split(/[.!?]+/);
-  const words = text.split(/\s+/);
-  const syllables = countSyllables(text);
-
-  // Average words per sentence
-  const avgWordsPerSentence = words.length / sentences.length;
-  
-  // Average syllables per word
-  const avgSyllablesPerWord = syllables / words.length;
-  
-  // Simplified Flesch Reading Ease calculation
-  const readabilityScore = 206.835 - (1.015 * avgWordsPerSentence) - (84.6 * avgSyllablesPerWord);
-  
-  // Convert to percentage (0-100)
-  return Math.min(100, Math.max(0, Math.round(readabilityScore)));
-}
-
-function countSyllables(text: string): number {
-  return text.toLowerCase()
-    .replace(/[^a-z]/g, '')
-    .replace(/[^aeiouy]+/g, ' ')
-    .trim()
-    .split(' ')
-    .filter(Boolean)
-    .length;
-}
 
 export default App;
