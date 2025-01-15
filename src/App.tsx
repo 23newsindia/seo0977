@@ -1,9 +1,16 @@
-// Utility functions first
+import React, { useState } from 'react';
+import { createClient } from '@supabase/supabase-js';
+import { HfInference } from '@huggingface/inference';
+import { AlertCircle, Bold, Heading1, Italic, Link, List, LayoutDashboard } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+
+// Interface definitions
 interface SEOCheckResult {
   score: number;
   suggestions: string[];
 }
 
+// Utility functions
 function calculateKeywordDensity(text: string): SEOCheckResult {
   const words = text.toLowerCase().split(/\s+/);
   const wordFrequency: { [key: string]: number } = {};
@@ -179,16 +186,17 @@ function countSyllables(text: string): number {
 }
 
 function calculateReadabilityScore(text: string): number {
-  const sentences = text.split(/[.!?]+/);
-  const words = text.split(/\s+/);
+  const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 0);
+  const words = text.split(/\s+/).filter(w => w.length > 0);
   const syllables = countSyllables(text);
 
-  const avgWordsPerSentence = words.length / sentences.length;
-  const avgSyllablesPerWord = syllables / words.length;
+  // Automated Readability Index (ARI)
+  const characters = text.replace(/\s+/g, '').length;
+  const ari = 4.71 * (characters / words.length) + 0.5 * (words.length / sentences.length) - 21.43;
   
-  const readabilityScore = 206.835 - (1.015 * avgWordsPerSentence) - (84.6 * avgSyllablesPerWord);
-  
-  return Math.min(100, Math.max(0, Math.round(readabilityScore)));
+  // Adjust score to better match Hemingway
+  const score = Math.max(0, Math.min(100, 100 - (ari * 5)));
+  return Math.round(score);
 }
 
 function analyzeReadability(text: string) {
@@ -246,12 +254,6 @@ try {
 }
 
 // Main App Component
-import React, { useState } from 'react';
-import { createClient } from '@supabase/supabase-js';
-import { HfInference } from '@huggingface/inference';
-import { AlertCircle, Bold, Heading1, Italic, Link, List, LayoutDashboard } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
-
 function App() {
   const [content, setContent] = useState('');
   const [seoScore, setSeoScore] = useState(0);
@@ -262,6 +264,7 @@ function App() {
   const [hardSentences, setHardSentences] = useState<string[]>([]);
   const [veryHardSentences, setVeryHardSentences] = useState<string[]>([]);
   const [grade, setGrade] = useState<number>(0);
+  const [hardSentenceRanges, setHardSentenceRanges] = useState<Array<{ start: number; end: number; type: 'hard' | 'veryHard' }>>([]);
 
   const analyzeSEO = async (text: string) => {
     const seoChecks = {
@@ -284,10 +287,37 @@ function App() {
 
     setSuggestions(newSuggestions);
 
-    const { score: readabilityScore, hardSentences: hard, veryHardSentences: veryHard, grade: readingGrade } = analyzeReadability(text);
-    setReadabilityScore(readabilityScore);
-    setHardSentences(hard);
+    // Enhanced readability analysis
+    const sentences = text.split(/[.!?]+/).map(s => s.trim()).filter(s => s.length > 0);
+    const ranges: Array<{ start: number; end: number; type: 'hard' | 'veryHard' }> = [];
+    let currentPosition = 0;
+
+    sentences.forEach(sentence => {
+      const words = sentence.split(/\s+/);
+      const syllables = countSyllables(sentence);
+      const avgSyllablesPerWord = syllables / words.length;
+      
+      // Find the actual position of this sentence in the text
+      const start = text.indexOf(sentence, currentPosition);
+      const end = start + sentence.length;
+      currentPosition = end;
+
+      if (avgSyllablesPerWord > 2.5 || words.length > 30) {
+        ranges.push({ start, end, type: 'veryHard' });
+      } else if (avgSyllablesPerWord > 2.0 || words.length > 20) {
+        ranges.push({ start, end, type: 'hard' });
+      }
+    });
+
+    setHardSentenceRanges(ranges);
+    const veryHard = ranges.filter(r => r.type === 'veryHard').map(r => text.slice(r.start, r.end));
+    const hard = ranges.filter(r => r.type === 'hard').map(r => text.slice(r.start, r.end));
+    
     setVeryHardSentences(veryHard);
+    setHardSentences(hard);
+
+    const { score: readabilityScore, grade: readingGrade } = analyzeReadability(text);
+    setReadabilityScore(readabilityScore);
     setGrade(readingGrade);
   };
 
@@ -525,7 +555,22 @@ function App() {
                     />
                   </div>
                   <div className="prose prose-sm max-w-none bg-gray-50 p-4 rounded-md overflow-auto">
-                    <ReactMarkdown>{content}</ReactMarkdown>
+                    {/* Highlight difficult sentences in the preview */}
+                    {content.split(/([.!?]+)/).map((part, index) => {
+                      const range = hardSentenceRanges.find(r => 
+                        content.indexOf(part, r.start) >= r.start && 
+                        content.indexOf(part, r.start) < r.end
+                      );
+                      
+                      return range ? (
+                        <span
+                          key={index}
+                          className={range.type === 'veryHard' ? 'bg-red-100' : 'bg-yellow-100'}
+                        >
+                          {part}
+                        </span>
+                      ) : part;
+                    })}
                   </div>
                 </div>
 
@@ -618,6 +663,5 @@ function App() {
     </div>
   );
 }
-
 
 export default App;
